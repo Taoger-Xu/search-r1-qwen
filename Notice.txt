@@ -1,0 +1,7 @@
+Copyright 2023-2024 Bytedance Ltd. and/or its affiliates
+
+----------------------------------------
+Additional notices for this derivative work:
+
+Copyright 2025 Amazon.com, Inc. or its affiliates
+Modifications made by Amazon are licensed under the Apache License, Version 2.0.
