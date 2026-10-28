@@ -1,8 +1,13 @@
-export DATA_DIR='data/nq_search'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+source scripts/local_env.sh
+
+export DATA_DIR="${DATA_DIR:-/home/jk/work/datasets/nq_search}"
 
 # Automatically detect number of GPUs
-if [ -z "$N_GPUS" ]; then
-    if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+if [ -z "${N_GPUS:-}" ]; then
+    if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
         N_GPUS=1
     else
         N_GPUS=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
@@ -34,11 +39,12 @@ echo "  Experiment name: $EXPERIMENT_NAME"
 echo "  Retrieval URL: http://127.0.0.1:8000/retrieve"
 
 # Create logs directory if it doesn't exist
-mkdir -p logs
+mkdir -p logs inference
 
 # Start evaluation using the trained PPO model
 
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_eval_search_r1 \
+    'hydra.run.dir=logs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}' \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \
     data.train_batch_size=512 \
@@ -54,14 +60,17 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_eval_search_r1 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.285 \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.fsdp_config.param_offload=true \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=4608 \
+    actor_rollout_ref.rollout.max_num_seqs=16 \
+    actor_rollout_ref.rollout.enforce_eager=true \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.rollout.temperature=1 \
     actor_rollout_ref.actor.state_masking=true \
@@ -70,7 +79,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_eval_search_r1 \
     critic.optim.lr_warmup_steps_ratio=0.015 \
     critic.model.path=$BASE_MODEL \
     critic.model.enable_gradient_checkpointing=true \
-    critic.ppo_micro_batch_size_per_gpu=8 \
+    critic.ppo_micro_batch_size_per_gpu=1 \
     critic.model.fsdp_config.param_offload=true \
     critic.model.fsdp_config.optimizer_offload=true \
     algorithm.kl_ctrl.kl_coef=0.001 \
@@ -92,7 +101,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_eval_search_r1 \
     max_turns=2 \
     retriever.url="http://127.0.0.1:8000/retrieve" \
     retriever.topk=3 \
-    2>&1 | tee ${EXPERIMENT_NAME}.log
+    2>&1 | tee "${EVAL_LOG:-logs/${EXPERIMENT_NAME}.log}"
 
 # Capture the exit code of the evaluation process
 EVAL_EXIT_CODE=$?

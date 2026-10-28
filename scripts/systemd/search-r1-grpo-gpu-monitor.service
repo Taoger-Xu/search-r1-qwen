@@ -1,0 +1,11 @@
+[Unit]
+Description=Search-R1 GPU temperature and power monitor
+
+[Service]
+WorkingDirectory=/home/jk/work/Search-R1-Qwen3
+ExecStart=/bin/bash scripts/grpo/monitor_gpu.sh
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=default.target

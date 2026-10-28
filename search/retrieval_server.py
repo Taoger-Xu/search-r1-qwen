@@ -210,10 +210,30 @@ class DenseRetriever(BaseRetriever):
         self.index = faiss.read_index(self.index_path)
         self.config = config
         if config.faiss_gpu:
-            co = faiss.GpuMultipleClonerOptions()
-            co.useFloat16 = True
-            co.shard = True
-            self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+            if torch.cuda.device_count() == 1:
+                resources = faiss.StandardGpuResources()
+                gpu_config = faiss.GpuIndexFlatConfig()
+                gpu_config.device = 0
+                gpu_config.useFloat16 = True
+                if self.index.metric_type == faiss.METRIC_INNER_PRODUCT:
+                    gpu_index = faiss.GpuIndexFlatIP(resources, self.index.d, gpu_config)
+                elif self.index.metric_type == faiss.METRIC_L2:
+                    gpu_index = faiss.GpuIndexFlatL2(resources, self.index.d, gpu_config)
+                else:
+                    raise ValueError(f"Unsupported GPU flat-index metric: {self.index.metric_type}")
+                if not hasattr(self.index, "get_xb"):
+                    raise TypeError("Single-GPU streaming requires a FAISS flat index")
+                vectors = faiss.rev_swig_ptr(self.index.get_xb(), self.index.ntotal * self.index.d)
+                vectors = vectors.reshape(self.index.ntotal, self.index.d)
+                for start in tqdm(range(0, self.index.ntotal, 100_000), desc="GPU index upload"):
+                    gpu_index.add(np.ascontiguousarray(vectors[start:start + 100_000]))
+                self.index = gpu_index
+                self.gpu_resources = resources
+            else:
+                options = faiss.GpuMultipleClonerOptions()
+                options.useFloat16 = True
+                options.shard = True
+                self.index = faiss.index_cpu_to_all_gpus(self.index, co=options)
 
         self.corpus = load_corpus(self.corpus_path)
         self.encoder = Encoder(
@@ -347,11 +367,15 @@ def retrieve_endpoint(request: QueryRequest):
         request.topk = config.retrieval_topk  # fallback to default
 
     # Perform batch retrieval
-    results, scores = retriever.batch_search(
+    search_output = retriever.batch_search(
         query_list=request.queries,
         num=request.topk,
         return_score=request.return_scores
     )
+    if request.return_scores:
+        results, scores = search_output
+    else:
+        results, scores = search_output, None
     
     # Format response
     resp = []

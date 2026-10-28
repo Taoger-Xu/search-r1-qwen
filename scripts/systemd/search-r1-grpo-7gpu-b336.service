@@ -1,0 +1,21 @@
+[Unit]
+Description=Search-R1 7 GPU GRPO with checkpoint recovery
+Wants=search-r1-retriever.service
+After=search-r1-retriever.service
+StartLimitIntervalSec=7200
+StartLimitBurst=3
+
+[Service]
+WorkingDirectory=/home/jk/work/Search-R1-Qwen3
+Environment=TRAIN_GPU_UUIDS=GPU-9f9025a4-ced8-c938-7598-69a0ff916759,GPU-b818efc0-50a6-62ef-cd84-f79e3d7f60fd,GPU-36472419-6bcd-c528-2790-95740b35c995,GPU-cdd0734d-d982-6a5d-7f36-6a1e9943f613,GPU-60c0380a-b488-7100-d7fb-d223823e7872,GPU-8a06c62e-4a01-f0aa-ca04-905d6fa9ebe0,GPU-05958ee9-7b32-c56a-4f57-222259b6c788
+Environment=NCCL_P2P_DISABLE=1
+Environment=NCCL_IB_DISABLE=1
+ExecStart=/bin/bash scripts/grpo/run_paper_durable.sh
+ExecStopPost=/usr/bin/python3 scripts/grpo/cuda_recovery.py
+Restart=on-failure
+RestartSec=60
+KillMode=control-group
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

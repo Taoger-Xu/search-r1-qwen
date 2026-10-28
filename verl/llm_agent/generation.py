@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import re
 from collections import defaultdict
 import os
@@ -166,6 +167,54 @@ class LLMGenerationManager:
         
         return {'responses': responses[:, :max_len], 'responses_with_info_mask': responses_with_info_mask[:, :max_len]}
 
+    @staticmethod
+    def _valid_turn_format(response: str, action_type: str) -> bool:
+        """Check the prompt's think-then-action protocol without changing execution."""
+        remaining = response.strip()
+        think_count = 0
+        while remaining.startswith('<think>'):
+            end = remaining.find('</think>', len('<think>'))
+            if end < 0:
+                return False
+            think_count += 1
+            remaining = remaining[end + len('</think>'):].lstrip()
+        if think_count == 0:
+            return False
+        match = re.fullmatch(r'<(search|answer)>(.*?)</\1>', remaining, re.DOTALL)
+        return bool(match and match.group(1) == action_type and match.group(2).strip())
+
+    def _record_turn(self, boundaries, answer_positions, before, after,
+                     responses_ids, responses_str, observation_ids, active_mask,
+                     is_search):
+        """Record half-open offsets in the final right-padded response token space."""
+        pad_id = self.tokenizer.pad_token_id
+        actions, _ = self.postprocess_predictions(responses_str)
+        for i, active in enumerate(active_mask.tolist()):
+            if not active:
+                continue
+            start = int((before['responses'][i] != pad_id).sum().item())
+            action_len = int((responses_ids[i] != pad_id).sum().item())
+            observation_len = (int((observation_ids[i] != pad_id).sum().item())
+                               if observation_ids is not None else 0)
+            retained_len = int((after['responses'][i] != pad_id).sum().item())
+            action_end = min(start + action_len, retained_len)
+            end = min(start + action_len + observation_len, retained_len)
+            if action_end <= start:
+                continue
+            action_type = actions[i] or 'invalid'
+            boundaries[i].append({
+                'step': len(boundaries[i]),
+                'response_start': start,
+                'action_end': action_end,
+                'response_end': end,
+                'action_type': action_type,
+                'format_valid': (action_end == start + action_len
+                                 and self._valid_turn_format(responses_str[i], action_type)),
+                'search_executed': bool(is_search[i] and observation_ids is not None),
+            })
+            if action_type == 'answer':
+                answer_positions[i] = action_end - 1
+
     def _generate_with_gpu_padding(self, active_batch: DataProto) -> DataProto:
         """
             Wrapper for generation that handles multi-GPU padding requirements.
@@ -227,6 +276,8 @@ class LLMGenerationManager:
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_search_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
+        turn_boundaries = [[] for _ in range(gen_batch.batch['input_ids'].shape[0])]
+        answer_positions = [None] * len(turn_boundaries)
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
         
@@ -235,6 +286,7 @@ class LLMGenerationManager:
         for step in range(self.config.max_turns):
             if not active_mask.sum():
                 break
+            active_before = active_mask.clone()
             rollings.batch = self.tensor_fn.cut_to_effective_len(
                 rollings.batch,
                 keys=['input_ids', 'attention_mask', 'position_ids']
@@ -270,14 +322,19 @@ class LLMGenerationManager:
                 responses_ids,
                 next_obs_ids
             )
-            original_right_side = self._update_right_side(
+            updated_right_side = self._update_right_side(
                 original_right_side,
                 responses_ids,
                 next_obs_ids
             )
+            self._record_turn(turn_boundaries, answer_positions, original_right_side,
+                              updated_right_side, responses_ids, responses_str,
+                              next_obs_ids, active_before, is_search)
+            original_right_side = updated_right_side
             
         # final LLM rollout
         if active_mask.sum():
+            active_before = active_mask.clone()
             rollings.batch = self.tensor_fn.cut_to_effective_len(
                 rollings.batch,
                 keys=['input_ids', 'attention_mask', 'position_ids']
@@ -305,10 +362,14 @@ class LLMGenerationManager:
             valid_search_stats += torch.tensor(is_search, dtype=torch.int)
             
 
-            original_right_side = self._update_right_side(
+            updated_right_side = self._update_right_side(
                 original_right_side,
                 responses_ids,
             )
+            self._record_turn(turn_boundaries, answer_positions, original_right_side,
+                              updated_right_side, responses_ids, responses_str,
+                              None, active_before, is_search)
+            original_right_side = updated_right_side
         
         meta_info['turns_stats'] = turns_stats.tolist()
         meta_info['active_mask'] = active_mask.tolist()
@@ -317,7 +378,17 @@ class LLMGenerationManager:
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
-        return self._compose_final_output(original_left_side, original_right_side, meta_info)
+        output = self._compose_final_output(original_left_side, original_right_side, meta_info)
+        prompt_width = output.batch['prompts'].shape[1]
+        for sample_boundaries in turn_boundaries:
+            for boundary in sample_boundaries:
+                boundary['input_end'] = prompt_width + boundary['response_end']
+        boundary_array = np.empty(len(turn_boundaries), dtype=object)
+        boundary_array[:] = turn_boundaries
+        output.non_tensor_batch['turn_boundaries'] = boundary_array
+        output.non_tensor_batch['answer_token_index'] = np.array(answer_positions, dtype=object)
+        output.check_consistency()
+        return output
 
     def _compose_final_output(self, left_side: Dict,
                             right_side: Dict,

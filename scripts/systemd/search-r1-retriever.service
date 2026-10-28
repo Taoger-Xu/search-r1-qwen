@@ -1,0 +1,16 @@
+[Unit]
+Description=Search-R1 GPU retriever
+StartLimitIntervalSec=1800
+StartLimitBurst=5
+
+[Service]
+WorkingDirectory=/home/jk/work/Search-R1-Qwen3
+Environment=RETRIEVER_FAISS_GPU=1
+Environment=RETRIEVER_GPU=GPU-6ca656b1-228e-9300-4c94-af9b682fdce7
+ExecStart=/bin/bash scripts/retrieval/start_local.sh
+Restart=on-failure
+RestartSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

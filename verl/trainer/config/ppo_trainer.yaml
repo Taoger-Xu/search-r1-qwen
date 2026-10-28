@@ -218,6 +218,8 @@ trainer:
 
   # Save frequency (by iteration) for model checkpoints
   save_freq: -1
+  # Anchor for save frequency; e.g. offset 100 and frequency 15 saves at 115, 130, ...
+  save_freq_offset: 0
 
   # ESI refers to the elastic server instance used during training, similar to the training plan. For example,
   # if you purchase 10 hours of computing power, the ESI will automatically shut down after 10 hours of training.
@@ -261,6 +263,9 @@ trainer:
 
   # Maximum number of critic checkpoints to keep
   max_critic_ckpt_to_keep: null
+
+  # Remove old complete checkpoint directories only after the new checkpoint is committed
+  max_complete_ckpt_to_keep: null
 
   # Timeout (in seconds) for Ray worker to wait for registration
   ray_wait_register_center_timeout: 300

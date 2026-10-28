@@ -56,9 +56,13 @@ merged_models/
 inference/
 outputs/
 wandb/
+swanlog/
+.swanlab/
 
 # Data
 data/
+!verl/trainer/config/data/
+!verl/trainer/config/data/*.yaml
 *.parquet
 *.jsonl
 *.index
@@ -68,3 +72,19 @@ data/
 *.tmp
 *.temp
 .cache/
+
+# Compatibility paths to local-only logs, runtime state and credentials.
+/logs/
+/wandb
+/swanlog
+/outputs
+/.swanlab
+*.out
+*.err
+*.pid
+.env.*
+
+# Root compatibility launchers and machine-specific setup notes
+/train*.sh
+/eval*.sh
+/LOCAL_SETUP.md

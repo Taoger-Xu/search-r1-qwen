@@ -20,6 +20,7 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import json
 import os
+import shutil
 import uuid
 import warnings
 from collections import defaultdict
@@ -1010,6 +1011,22 @@ class RayPPOTrainer:
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
 
+        max_complete_ckpt_to_keep = self.config.trainer.get("max_complete_ckpt_to_keep", None)
+        if max_complete_ckpt_to_keep is not None:
+            assert isinstance(max_complete_ckpt_to_keep, int) and max_complete_ckpt_to_keep > 0
+            checkpoint_dirs = sorted(
+                (
+                    (int(name.removeprefix("global_step_")), os.path.join(self.config.trainer.default_local_dir, name))
+                    for name in os.listdir(self.config.trainer.default_local_dir)
+                    if name.startswith("global_step_")
+                    and name.removeprefix("global_step_").isdigit()
+                    and int(name.removeprefix("global_step_")) <= self.global_steps
+                ),
+                reverse=True,
+            )
+            for _, old_dir in checkpoint_dirs[max_complete_ckpt_to_keep:]:
+                shutil.rmtree(old_dir)
+
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
             return 0
@@ -1453,7 +1470,9 @@ class RayPPOTrainer:
                 # 3. The current step number is a multiple of the save frequency.
                 # 4. The ESI(Elastic Server Instance)/training plan is close to expiration.
                 if self.config.trainer.save_freq > 0 and (
-                    is_last_step or self.global_steps % self.config.trainer.save_freq == 0 or esi_close_to_expiration
+                    is_last_step
+                    or (self.global_steps - self.config.trainer.save_freq_offset) % self.config.trainer.save_freq == 0
+                    or esi_close_to_expiration
                 ):
                     if esi_close_to_expiration:
                         print("Force saving checkpoint: ESI instance expiration approaching.")
